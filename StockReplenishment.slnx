@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/StockReplenishment.Application/StockReplenishment.Application.csproj" />
+    <Project Path="src/StockReplenishment.Domain/StockReplenishment.Domain.csproj" />
+    <Project Path="src/StockReplenishment.Infrastructure/StockReplenishment.Infrastructure.csproj" />
+    <Project Path="src/StockReplenishment.Web/StockReplenishment.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/StockReplenishment.Tests/StockReplenishment.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,18 @@
+@using StockReplenishment.Domain.Enums
+
+<MudChip T="string" Color="@GetColor()" Size="Size.Small">@Status</MudChip>
+
+@code {
+    [Parameter, EditorRequired]
+    public ReplenishmentStatus Status { get; set; }
+
+    private Color GetColor() => Status switch
+    {
+        ReplenishmentStatus.Draft => Color.Default,
+        ReplenishmentStatus.Submitted => Color.Info,
+        ReplenishmentStatus.Approved => Color.Success,
+        ReplenishmentStatus.Rejected => Color.Error,
+        ReplenishmentStatus.Fulfilled => Color.Primary,
+        _ => Color.Default
+    };
+}

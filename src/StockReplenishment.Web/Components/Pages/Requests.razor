@@ -1,0 +1,135 @@
+@page "/"
+@page "/requests"
+@inject ReplenishmentApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>Replenishment Requests</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Stock Replenishment Requests</MudText>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudGrid>
+        <MudItem xs="12" sm="3">
+            <MudSelect T="ReplenishmentStatus?" Label="Status" Value="_status" ValueChanged="OnStatusChanged">
+                <MudSelectItem T="ReplenishmentStatus?" Value="@((ReplenishmentStatus?)null)">All</MudSelectItem>
+                @foreach (var status in Enum.GetValues<ReplenishmentStatus>())
+                {
+                    <MudSelectItem T="ReplenishmentStatus?" Value="@((ReplenishmentStatus?)status)">@status</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="3">
+            <MudSelect T="RequestPriority?" Label="Priority" Value="_priority" ValueChanged="OnPriorityChanged">
+                <MudSelectItem T="RequestPriority?" Value="@((RequestPriority?)null)">All</MudSelectItem>
+                @foreach (var priority in Enum.GetValues<RequestPriority>())
+                {
+                    <MudSelectItem T="RequestPriority?" Value="@((RequestPriority?)priority)">@priority</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="3">
+            <MudSelect T="int?" Label="Location" Value="_locationId" ValueChanged="OnLocationChanged">
+                <MudSelectItem T="int?" Value="@((int?)null)">All</MudSelectItem>
+                @foreach (var location in _locations)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)location.Id)">@location.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="3" Class="d-flex justify-end">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="GoToCreate">
+                Create Request
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+@if (_loading)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else
+{
+    <MudTable Items="_result?.Items" Hover="true" Dense="true">
+        <HeaderContent>
+            <MudTh>Request</MudTh>
+            <MudTh>Location</MudTh>
+            <MudTh>Priority</MudTh>
+            <MudTh>Status</MudTh>
+            <MudTh>Created</MudTh>
+            <MudTh></MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Request">@context.RequestNumber</MudTd>
+            <MudTd DataLabel="Location">@context.LocationName</MudTd>
+            <MudTd DataLabel="Priority">@context.Priority</MudTd>
+            <MudTd DataLabel="Status"><RequestStatusChip Status="context.Status" /></MudTd>
+            <MudTd DataLabel="Created">@context.CreatedAt.ToLocalTime().ToString("g")</MudTd>
+            <MudTd>
+                <MudButton Size="Size.Small" OnClick="() => GoToDetails(context.Id)">View</MudButton>
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText>No replenishment requests match the current filters.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+
+    @if (_result is not null && _result.TotalPages > 1)
+    {
+        <MudPagination Class="mt-4" Count="_result.TotalPages" Selected="_page" SelectedChanged="OnPageChanged" />
+    }
+}
+
+@code {
+    private PaginatedResultDto<ReplenishmentRequestDto>? _result;
+    private IReadOnlyCollection<StockLocationDto> _locations = [];
+    private ReplenishmentStatus? _status;
+    private RequestPriority? _priority;
+    private int? _locationId;
+    private int _page = 1;
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _locations = await Api.GetLocationsAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _result = await Api.GetRequestsAsync(_status, _priority, _locationId, _page);
+        _loading = false;
+    }
+
+    private Task OnStatusChanged(ReplenishmentStatus? value)
+    {
+        _status = value;
+        _page = 1;
+        return LoadAsync();
+    }
+
+    private Task OnPriorityChanged(RequestPriority? value)
+    {
+        _priority = value;
+        _page = 1;
+        return LoadAsync();
+    }
+
+    private Task OnLocationChanged(int? value)
+    {
+        _locationId = value;
+        _page = 1;
+        return LoadAsync();
+    }
+
+    private Task OnPageChanged(int page)
+    {
+        _page = page;
+        return LoadAsync();
+    }
+
+    private void GoToCreate() => Navigation.NavigateTo("/requests/create");
+
+    private void GoToDetails(int id) => Navigation.NavigateTo($"/requests/{id}");
+}
