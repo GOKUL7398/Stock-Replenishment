@@ -1,0 +1,255 @@
+@page "/requests/{Id:int}"
+@implements IDisposable
+@inject ReplenishmentApiClient Api
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>Request Details</PageTitle>
+
+@if (_request is null)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else
+{
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+        <MudText Typo="Typo.h4">@_request.RequestNumber</MudText>
+        <RequestStatusChip Status="_request.Status" />
+    </MudStack>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudGrid>
+            <MudItem xs="12" sm="4"><MudText><b>Location:</b> @_request.LocationName</MudText></MudItem>
+            <MudItem xs="12" sm="4"><MudText><b>Priority:</b> @_request.Priority</MudText></MudItem>
+            <MudItem xs="12" sm="4"><MudText><b>Requested By:</b> @_request.RequestedBy</MudText></MudItem>
+            <MudItem xs="12" sm="4"><MudText><b>Created:</b> @_request.CreatedAt.ToLocalTime().ToString("g")</MudText></MudItem>
+            @if (_request.SubmittedAt is not null)
+            {
+                <MudItem xs="12" sm="4"><MudText><b>Submitted:</b> @_request.SubmittedAt.Value.ToLocalTime().ToString("g")</MudText></MudItem>
+            }
+            @if (_request.ReviewedAt is not null)
+            {
+                <MudItem xs="12" sm="4"><MudText><b>Reviewed By:</b> @_request.ReviewedBy (@_request.ReviewedAt.Value.ToLocalTime().ToString("g"))</MudText></MudItem>
+            }
+            @if (!string.IsNullOrWhiteSpace(_request.RejectionReason))
+            {
+                <MudItem xs="12"><MudText Color="Color.Error"><b>Rejection Reason:</b> @_request.RejectionReason</MudText></MudItem>
+            }
+        </MudGrid>
+    </MudPaper>
+
+    @if (_validationRunning)
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                <MudText>Checking stock availability... this may take a few seconds.</MudText>
+            </MudStack>
+        </MudAlert>
+    }
+    else if (_validation is not null && _validation.Status != StockValidationStatus.Pending)
+    {
+        <MudAlert Severity="@(_validation.Status == StockValidationStatus.Failed ? Severity.Warning : _validation.IsAvailable == true ? Severity.Success : Severity.Error)" Class="mb-4">
+            @(_validation.Message ?? "Stock validation completed.")
+        </MudAlert>
+    }
+
+    <MudTable Items="_request.Lines" Hover="true" Dense="true" Class="mb-4">
+        <HeaderContent>
+            <MudTh>Article</MudTh>
+            <MudTh>Description</MudTh>
+            <MudTh>Requested Qty</MudTh>
+            <MudTh>Fulfilled Qty</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.ArticleNumber</MudTd>
+            <MudTd>@context.Description</MudTd>
+            <MudTd>@context.RequestedQuantity</MudTd>
+            <MudTd>
+                @if (_request.Status == ReplenishmentStatus.Approved)
+                {
+                    <MudNumericField T="decimal" @bind-Value="_fulfilledQuantities[context.Id]" Min="0" Max="@context.RequestedQuantity" />
+                }
+                else
+                {
+                    @(context.FulfilledQuantity?.ToString() ?? "-")
+                }
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+
+    <MudStack Row="true" Spacing="2">
+        @if (_request.Status == ReplenishmentStatus.Draft)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Submit">Submit</MudButton>
+        }
+        @if (_request.Status == ReplenishmentStatus.Submitted)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="Approve">Approve</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="() => _showRejectDialog = true">Reject</MudButton>
+        }
+        @if (_request.Status == ReplenishmentStatus.Approved)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Fulfill">Fulfill</MudButton>
+        }
+        <MudButton Variant="Variant.Text" OnClick="GoToList">Back to list</MudButton>
+    </MudStack>
+
+    @if (_showRejectDialog)
+    {
+        <MudPaper Class="pa-4 mt-4" Elevation="2">
+            <MudTextField Label="Rejection Reason" @bind-Value="_rejectionReason" Lines="2" />
+            <MudStack Row="true" Spacing="2" Class="mt-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="Reject">Confirm Reject</MudButton>
+                <MudButton Variant="Variant.Text" OnClick="() => _showRejectDialog = false">Cancel</MudButton>
+            </MudStack>
+        </MudPaper>
+    }
+}
+
+@code {
+    [Parameter]
+    public int Id { get; set; }
+
+    private ReplenishmentRequestDto? _request;
+    private StockValidationResultDto? _validation;
+    private bool _validationRunning;
+    private bool _showRejectDialog;
+    private string _rejectionReason = string.Empty;
+    private readonly Dictionary<int, decimal> _fulfilledQuantities = [];
+    private CancellationTokenSource? _pollingCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _request = await Api.GetByIdAsync(Id);
+
+        if (_request is null)
+            return;
+
+        foreach (var line in _request.Lines)
+            _fulfilledQuantities[line.Id] = line.FulfilledQuantity ?? line.RequestedQuantity;
+
+        if (_request.Status == ReplenishmentStatus.Submitted)
+            await StartPollingAsync();
+    }
+
+    private async Task Submit()
+    {
+        var response = await Api.SubmitAsync(Id);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add("Failed to submit request.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task Approve()
+    {
+        var response = await Api.ApproveAsync(Id, new ApproveReplenishmentRequestDto { ReviewedBy = "supervisor" });
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add("Failed to approve request.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task Reject()
+    {
+        if (string.IsNullOrWhiteSpace(_rejectionReason))
+        {
+            Snackbar.Add("A rejection reason is required.", Severity.Error);
+            return;
+        }
+
+        var response = await Api.RejectAsync(Id, new RejectReplenishmentRequestDto
+        {
+            Reason = _rejectionReason,
+            ReviewedBy = "supervisor"
+        });
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add("Failed to reject request.", Severity.Error);
+            return;
+        }
+
+        _showRejectDialog = false;
+        await LoadAsync();
+    }
+
+    private async Task Fulfill()
+    {
+        if (_request is null)
+            return;
+
+        var dto = new FulfillReplenishmentRequestDto
+        {
+            FulfilledBy = "warehouse",
+            Lines = _request.Lines.Select(l => new FulfilledLineDto
+            {
+                LineId = l.Id,
+                FulfilledQuantity = _fulfilledQuantities[l.Id]
+            }).ToList()
+        };
+
+        var response = await Api.FulfillAsync(Id, dto);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add("Failed to fulfill request.", Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task StartPollingAsync()
+    {
+        _validationRunning = true;
+        _pollingCts?.Cancel();
+        _pollingCts = new CancellationTokenSource();
+        var token = _pollingCts.Token;
+
+        while (!token.IsCancellationRequested)
+        {
+            var result = await Api.GetValidationAsync(Id);
+            _validation = result;
+
+            if (result.Status != StockValidationStatus.Pending)
+            {
+                _validationRunning = false;
+                StateHasChanged();
+                return;
+            }
+
+            StateHasChanged();
+
+            try
+            {
+                await Task.Delay(2000, token);
+            }
+            catch (TaskCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    private void GoToList() => Navigation.NavigateTo("/");
+
+    public void Dispose()
+    {
+        _pollingCts?.Cancel();
+    }
+}

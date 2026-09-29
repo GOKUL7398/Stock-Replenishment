@@ -1,0 +1,151 @@
+@page "/requests/create"
+@inject ReplenishmentApiClient Api
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>Create Replenishment Request</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Create Replenishment Request</MudText>
+
+<MudPaper Class="pa-4" Elevation="1">
+    <MudForm @ref="_form">
+        <MudGrid>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="int" Label="Stock Location" @bind-Value="_locationId" Required="true">
+                    @foreach (var location in _locations)
+                    {
+                        <MudSelectItem T="int" Value="@location.Id">@location.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="RequestPriority" Label="Priority" @bind-Value="_priority">
+                    @foreach (var priority in Enum.GetValues<RequestPriority>())
+                    {
+                        <MudSelectItem T="RequestPriority" Value="@priority">@priority</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField Label="Requested By" @bind-Value="_requestedBy" Required="true" />
+            </MudItem>
+        </MudGrid>
+
+        <MudText Typo="Typo.h6" Class="mt-4 mb-2">Material Lines</MudText>
+
+        @foreach (var line in _lines)
+        {
+            <MudGrid Class="mb-2">
+                <MudItem xs="12" sm="3">
+                    <MudTextField Label="Article Number" @bind-Value="line.ArticleNumber" />
+                </MudItem>
+                <MudItem xs="12" sm="5">
+                    <MudTextField Label="Description" @bind-Value="line.Description" />
+                </MudItem>
+                <MudItem xs="12" sm="3">
+                    <MudNumericField T="decimal" Label="Quantity" @bind-Value="line.RequestedQuantity" Min="0" />
+                </MudItem>
+                <MudItem xs="12" sm="1" Class="d-flex align-center">
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" OnClick="() => RemoveLine(line)" />
+                </MudItem>
+            </MudGrid>
+        }
+
+        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddLine" Class="mb-4">
+            Add Material
+        </MudButton>
+
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Outlined" OnClick="SaveDraft" Disabled="_saving">Save Draft</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SubmitRequest" Disabled="_saving">Save &amp; Submit</MudButton>
+        </MudStack>
+    </MudForm>
+</MudPaper>
+
+@code {
+    private MudForm _form = null!;
+    private IReadOnlyCollection<StockLocationDto> _locations = [];
+    private int _locationId;
+    private RequestPriority _priority = RequestPriority.Normal;
+    private string _requestedBy = string.Empty;
+    private readonly List<CreateReplenishmentLineDto> _lines = [];
+    private bool _saving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _locations = await Api.GetLocationsAsync();
+
+        if (_locations.Count > 0)
+            _locationId = _locations.First().Id;
+
+        AddLine();
+    }
+
+    private void AddLine() => _lines.Add(new CreateReplenishmentLineDto());
+
+    private void RemoveLine(CreateReplenishmentLineDto line) => _lines.Remove(line);
+
+    private async Task SaveDraft()
+    {
+        var created = await CreateRequestAsync();
+
+        if (created is not null)
+            Navigation.NavigateTo($"/requests/{created.Id}");
+    }
+
+    private async Task SubmitRequest()
+    {
+        var created = await CreateRequestAsync();
+
+        if (created is null)
+            return;
+
+        var response = await Api.SubmitAsync(created.Id);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add("Draft saved, but submission failed.", Severity.Warning);
+            Navigation.NavigateTo($"/requests/{created.Id}");
+            return;
+        }
+
+        Navigation.NavigateTo($"/requests/{created.Id}");
+    }
+
+    private async Task<ReplenishmentRequestDto?> CreateRequestAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_requestedBy))
+        {
+            Snackbar.Add("Requested By is required.", Severity.Error);
+            return null;
+        }
+
+        if (_lines.Count == 0)
+        {
+            Snackbar.Add("At least one material line is required.", Severity.Error);
+            return null;
+        }
+
+        _saving = true;
+
+        var dto = new CreateReplenishmentRequestDto
+        {
+            StockLocationId = _locationId,
+            Priority = _priority,
+            RequestedBy = _requestedBy,
+            Lines = _lines
+        };
+
+        var response = await Api.CreateAsync(dto);
+
+        _saving = false;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add("Failed to create request.", Severity.Error);
+            return null;
+        }
+
+        return await response.Content.ReadFromJsonAsync<ReplenishmentRequestDto>();
+    }
+}
